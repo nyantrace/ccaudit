@@ -3,7 +3,9 @@
 **Date:** 2026-04-20
 **Status:** approved for implementation (post-codex-review revision)
 **Target:** ccaudit v0.1.1
-**Goal:** ship a new `ccaudit daily` subcommand that surfaces specific leaks worth fixing today, derived from yesterday's session data. Default output remains unchanged in v0.1.1; a default flip is deferred to a future major version once retention signal proves out.
+**Goal:** ship daily actionable diagnosis as the default `ccaudit` output. `ccaudit` with no flags becomes a one-glance digest of yesterday's top leaks with specific fixes and dollar impact. The v0.1.0 7-day summary remains available via `ccaudit --weekly`.
+
+**Default change rationale:** codex flagged the flip as a minor-release break. Product rationale overrides: the retention thesis depends on users seeing the daily findings format by default, not as an opt-in nobody types. In a 0.x release semver permits this; v0.1.1 release notes and a one-time post-upgrade notice mitigate surprise.
 
 ## Why
 
@@ -15,19 +17,21 @@ Anthropic's `/insights` command is a workflow analyzer (stats, narrative, tool c
 
 ## Command surface
 
-v0.1.1 adds one new subcommand:
-
 ```
-ccaudit daily          # new — daily findings (this spec)
-ccaudit                # unchanged — 7-day summary
-ccaudit --weekly       # new alias — same as no-flag
-ccaudit --share        # unchanged — 7-day PNG card
-ccaudit daily --share  # new — daily PNG card variant
+ccaudit                # new default — daily findings (this spec)
+ccaudit --weekly       # new — v0.1.0 7-day summary
+ccaudit --share        # new default — daily PNG card
+ccaudit --weekly --share  # new — 7-day PNG card (v0.1.0 format)
+ccaudit --ephemeral    # new — disable state persistence (no file writes)
+ccaudit --why <id>     # new — drill-down (see below)
+ccaudit --json         # unchanged — full structured output
+ccaudit --since <dur>  # unchanged
+ccaudit --project <n>  # unchanged
 ```
 
-Default behavior is preserved. Existing users who `npm update` see the same output they saw in v0.1.0. Running `ccaudit daily` is opt-in; the README prompts users to try it.
+**Post-upgrade notice:** on the first run after upgrading from v0.1.0 to v0.1.1, print a one-line banner above the daily output: *"ccaudit v0.1.1: default output is now daily findings. `ccaudit --weekly` for the 7-day summary you had before."* Detect "first run after upgrade" by checking if state.json is missing a `seenVersion: "0.1.1"` field; set it after displaying. Never shown again.
 
-## `ccaudit daily` output
+## Default output (new for v0.1.1)
 
 ```
 ccaudit — yesterday's findings (2026-04-19)
@@ -107,7 +111,7 @@ Tier 4 items are shown as footer one-liners, **not in the top-3 findings list**.
 
 ## Ranking function
 
-Every run of `ccaudit daily`:
+Every default run of `ccaudit`:
 
 1. Compute all eligible **findings** from yesterday (Tier 1-3 only)
 2. Score each: `weekly_savings_usd × confidence_weight × fix_specificity_weight`
@@ -135,6 +139,7 @@ Stored at `~/.cache/ccaudit/state.json`:
 ```json
 {
   "version": 1,
+  "seenVersion": "0.1.1",
   "history": [
     { "date": "2026-04-19", "totalUsd": 47.30, "trailingAvgUsd": 60.00 }
   ],
@@ -152,7 +157,8 @@ Stored at `~/.cache/ccaudit/state.json`:
 **Concurrency:** use a sidecar lockfile `state.json.lock` created with `{flag: 'wx'}` (fails if exists) and a 30-second TTL. If lock is stale (older than 30s), overwrite. If lock is fresh, skip state update for this run but still print findings (reads still work).
 
 **Privacy:** history contains daily spend totals. `lastFindings` may reference session UUIDs (opaque — not conversation content). Combined, this is 30 days of spend history + session IDs on disk. Not sensitive enough to refuse to write, but worth documenting:
-- `--no-state` flag disables state persistence entirely (findings still work; Tier 3 outlier detection skipped; `--why <id>` available only within the same run).
+- **`--ephemeral` flag** disables state persistence entirely (no reads, no writes). Findings still work; Tier 3 outlier detection is suppressed; `--why <id>` only resolves session UUIDs within the same run, not numeric finding IDs from a previous run. Useful for shared machines, synced home dirs, corporate policy, and CI contexts.
+- Flag is documented in the default `--help` footer, one line, because aligning with the "local, offline" positioning is worth surface area.
 - README calls out what gets stored and why.
 
 **30-day cap** — entries older than 30 days pruned on every write. Honest ceiling; streak and trailing-avg never query past this.
@@ -161,21 +167,26 @@ Stored at `~/.cache/ccaudit/state.json`:
 
 ## Backward compatibility
 
-v0.1.1 is **additive**. No v0.1.0 user sees different output unless they opt in by running `ccaudit daily` or `ccaudit --daily-default` (see below).
+v0.1.1 **changes the default output**. This is intentional; the retention thesis requires it. Mitigations:
 
 | Flag / command | Behavior |
 |---|---|
-| `ccaudit` (no args) | Unchanged — 7-day summary (v0.1.0 behavior) |
-| `ccaudit --weekly` | Alias for no-args, added for symmetry with `ccaudit daily` |
-| `ccaudit --since <dur>` | Unchanged |
-| `ccaudit --share` | Unchanged — 7-day PNG card |
-| `ccaudit --json` | Unchanged |
-| `ccaudit daily` | New — daily findings output |
-| `ccaudit daily --share` | New — daily PNG card variant |
-| `ccaudit daily --why <id>` | New — drill-down into finding `1`, `2`, `3` (cached from most recent `ccaudit daily` run) or a session UUID |
-| `ccaudit daily --no-state` | New — skip state persistence (Tier 3 outlier detection disabled) |
+| `ccaudit` (no args) | **New: daily findings** (changed from v0.1.0's 7-day summary) |
+| `ccaudit --weekly` | New: v0.1.0's 7-day summary (escape hatch for existing users) |
+| `ccaudit --since <dur>` | Unchanged — explicit time window renders 7-day-summary format |
+| `ccaudit --share` | **New: daily PNG card** (changed from v0.1.0's 7-day card) |
+| `ccaudit --weekly --share` | New: v0.1.0's 7-day PNG card |
+| `ccaudit --why <id>` | New — drill-down into finding `1`, `2`, `3` (from most recent default run) or a session UUID |
+| `ccaudit --ephemeral` | New — no state reads or writes; Tier 3 disabled; numeric `--why` disabled |
+| `ccaudit --json` | Unchanged — full structured output |
 
-The default flip to `daily` is deferred to a future major version (0.2.0 at earliest) and requires retention evidence first. Release notes for v0.1.1 frame this as opt-in.
+**Surprise mitigation:**
+1. One-time post-upgrade banner (see Command surface section)
+2. Release notes lead with the default change
+3. `--weekly` is a short, memorable escape hatch
+4. Existing `--since` / `--project` / `--share` / `--json` flags continue to work identically on their explicit paths
+
+**Not done:** a deprecation-warning release (e.g., v0.1.0.5 that warns before v0.1.1 flips). Judgment call: for a 5-day-old package with ~0 dependents, the cost of the warning phase is not worth the retention payoff of flipping immediately.
 
 ## What ccaudit will not claim
 
@@ -226,14 +237,13 @@ Integration tests:
 - Zero-session day produces the empty-day notice
 - All findings below $0.50/week threshold produces the "no leaks" message
 - Tier 4 advisory appears in footer regardless of finding count
-- `--no-state` flag: state file untouched, Tier 3 suppressed, other tiers work
+- `--ephemeral` flag: state file untouched, Tier 3 suppressed, numeric `--why` rejected with guidance, other tiers work
 
 Target: +18-22 tests on top of v0.1.0's 54, aiming for ~75 tests total.
 
 ## Out of scope
 
 Not in v0.1.1. Listed so future work has a visible backlog:
-- Default flip from 7-day summary to daily findings (requires retention evidence; v0.2.0 earliest)
 - `ccaudit watch` — live session tail (v0.2)
 - `ccaudit plan` — API vs subscription break-even analysis (v0.1.2)
 - Disabled plugins cost attribution (v0.1.2, needs Claude Code plugin registry parsing)
